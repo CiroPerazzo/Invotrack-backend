@@ -106,6 +106,9 @@ CREATE TABLE invoices (
   invoice_type TEXT NOT NULL DEFAULT 'Factura B',
   status TEXT NOT NULL DEFAULT 'pending'
     CHECK (status IN ('draft', 'pending', 'paid', 'overdue', 'cancelled')),
+  -- receivable = client owes us (income) | payable = we owe provider (expense)
+  type TEXT NOT NULL DEFAULT 'receivable'
+    CHECK (type IN ('receivable', 'payable')),
   issue_date DATE NOT NULL,
   due_date DATE,
   currency TEXT DEFAULT 'ARS',
@@ -138,6 +141,26 @@ CREATE TABLE invoice_items (
   subtotal NUMERIC(15, 2) DEFAULT 0,
   sort_order INTEGER DEFAULT 0,
   created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- ============================================================
+-- INVOICE PAYMENTS
+-- Supports partial payments — source of truth for cash flow
+-- ============================================================
+CREATE TABLE invoice_payments (
+  id             UUID        PRIMARY KEY DEFAULT uuid_generate_v4(),
+  invoice_id     UUID        NOT NULL REFERENCES invoices(id) ON DELETE CASCADE,
+  company_id     UUID        NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
+  user_id        UUID        NOT NULL REFERENCES profiles(id),
+  amount         NUMERIC(15, 2) NOT NULL CHECK (amount > 0),
+  payment_method TEXT        NOT NULL DEFAULT 'transfer'
+    CHECK (payment_method IN (
+      'transfer', 'cash', 'check', 'credit_card',
+      'debit_card', 'crypto', 'other'
+    )),
+  payment_date   DATE        NOT NULL DEFAULT CURRENT_DATE,
+  notes          TEXT,
+  created_at     TIMESTAMPTZ DEFAULT NOW()
 );
 
 -- ============================================================
@@ -189,10 +212,12 @@ CREATE TABLE audit_logs (
 
 ALTER TABLE profiles ENABLE ROW LEVEL SECURITY;
 ALTER TABLE companies ENABLE ROW LEVEL SECURITY;
+ALTER TABLE user_roles ENABLE ROW LEVEL SECURITY;
 ALTER TABLE clients ENABLE ROW LEVEL SECURITY;
 ALTER TABLE providers ENABLE ROW LEVEL SECURITY;
 ALTER TABLE invoices ENABLE ROW LEVEL SECURITY;
 ALTER TABLE invoice_items ENABLE ROW LEVEL SECURITY;
+ALTER TABLE invoice_payments ENABLE ROW LEVEL SECURITY;
 ALTER TABLE attachments ENABLE ROW LEVEL SECURITY;
 ALTER TABLE alerts ENABLE ROW LEVEL SECURITY;
 ALTER TABLE categories ENABLE ROW LEVEL SECURITY;
@@ -200,6 +225,24 @@ ALTER TABLE categories ENABLE ROW LEVEL SECURITY;
 -- Profiles: users can only see/edit their own profile
 CREATE POLICY "profiles_own" ON profiles
   FOR ALL USING (auth.uid() = id);
+
+-- Companies: owner has full access
+CREATE POLICY "companies_owner_access" ON companies
+  FOR ALL USING (auth.uid() = owner_id);
+
+-- Companies: members with a role can read
+CREATE POLICY "companies_member_read" ON companies
+  FOR SELECT USING (
+    EXISTS (
+      SELECT 1 FROM user_roles
+      WHERE user_roles.company_id = companies.id
+        AND user_roles.user_id = auth.uid()
+    )
+  );
+
+-- User roles: users see their own role assignments
+CREATE POLICY "user_roles_own" ON user_roles
+  FOR ALL USING (auth.uid() = user_id);
 
 -- Clients: users can only see their own clients
 CREATE POLICY "clients_own" ON clients
@@ -223,6 +266,10 @@ CREATE POLICY "invoice_items_own" ON invoice_items
     )
   );
 
+-- Invoice payments: users see their own payment records
+CREATE POLICY "invoice_payments_own" ON invoice_payments
+  FOR ALL USING (auth.uid() = user_id);
+
 -- Attachments: accessible through invoice ownership
 CREATE POLICY "attachments_own" ON attachments
   FOR ALL USING (auth.uid() = user_id);
@@ -230,6 +277,22 @@ CREATE POLICY "attachments_own" ON attachments
 -- Alerts: users see their own alerts
 CREATE POLICY "alerts_own" ON alerts
   FOR ALL USING (auth.uid() = user_id);
+
+-- Categories: owner or member of the company
+CREATE POLICY "categories_company_access" ON categories
+  FOR ALL USING (
+    EXISTS (
+      SELECT 1 FROM companies
+      WHERE companies.id = categories.company_id
+        AND companies.owner_id = auth.uid()
+    )
+    OR
+    EXISTS (
+      SELECT 1 FROM user_roles
+      WHERE user_roles.company_id = categories.company_id
+        AND user_roles.user_id = auth.uid()
+    )
+  );
 
 -- ============================================================
 -- TRIGGERS: auto-update updated_at
@@ -271,11 +334,81 @@ CREATE TRIGGER on_auth_user_created
 -- INDEXES
 -- ============================================================
 CREATE INDEX idx_invoices_user_id ON invoices(user_id);
+CREATE INDEX idx_invoices_company_id ON invoices(company_id);
+CREATE INDEX idx_invoices_type ON invoices(type);
 CREATE INDEX idx_invoices_status ON invoices(status);
 CREATE INDEX idx_invoices_issue_date ON invoices(issue_date);
 CREATE INDEX idx_invoices_due_date ON invoices(due_date);
+CREATE INDEX idx_invoices_company_type_status ON invoices(company_id, type, status);
 CREATE INDEX idx_invoice_items_invoice_id ON invoice_items(invoice_id);
+CREATE INDEX idx_invoice_payments_invoice_id ON invoice_payments(invoice_id);
+CREATE INDEX idx_invoice_payments_company_id ON invoice_payments(company_id);
+CREATE INDEX idx_invoice_payments_user_id ON invoice_payments(user_id);
+CREATE INDEX idx_invoice_payments_payment_date ON invoice_payments(payment_date);
+CREATE INDEX idx_invoice_payments_company_date ON invoice_payments(company_id, payment_date);
 CREATE INDEX idx_clients_user_id ON clients(user_id);
 CREATE INDEX idx_providers_user_id ON providers(user_id);
 CREATE INDEX idx_alerts_user_id ON alerts(user_id);
 CREATE INDEX idx_alerts_is_read ON alerts(is_read);
+
+-- ============================================================
+-- VIEWS: financial analytics
+-- ============================================================
+
+-- Per-invoice: paid vs pending from real payment records
+CREATE OR REPLACE VIEW invoice_financial_summary AS
+SELECT
+  i.id                                          AS invoice_id,
+  i.company_id,
+  i.user_id,
+  i.type,
+  i.status,
+  i.total_amount,
+  i.due_date,
+  i.issue_date,
+  i.currency,
+  COALESCE(SUM(p.amount), 0)                    AS total_paid,
+  i.total_amount - COALESCE(SUM(p.amount), 0)   AS total_pending,
+  CASE
+    WHEN COALESCE(SUM(p.amount), 0) >= i.total_amount THEN true
+    ELSE false
+  END                                           AS is_fully_paid,
+  CASE
+    WHEN i.due_date < CURRENT_DATE
+     AND COALESCE(SUM(p.amount), 0) < i.total_amount
+     AND i.status != 'cancelled'
+    THEN true
+    ELSE false
+  END                                           AS is_overdue
+FROM invoices i
+LEFT JOIN invoice_payments p ON p.invoice_id = i.id
+GROUP BY
+  i.id, i.company_id, i.user_id, i.type,
+  i.status, i.total_amount, i.due_date,
+  i.issue_date, i.currency;
+
+-- Per-company: receivable vs payable cash flow
+CREATE OR REPLACE VIEW company_cash_flow AS
+SELECT
+  i.company_id,
+  i.type,
+  i.currency,
+  COUNT(i.id)                                           AS invoice_count,
+  SUM(i.total_amount)                                   AS total_invoiced,
+  COALESCE(SUM(p_totals.paid), 0)                       AS total_collected,
+  SUM(i.total_amount) - COALESCE(SUM(p_totals.paid), 0) AS total_pending,
+  SUM(CASE
+    WHEN i.due_date < CURRENT_DATE
+     AND COALESCE(p_totals.paid, 0) < i.total_amount
+     AND i.status != 'cancelled'
+    THEN i.total_amount - COALESCE(p_totals.paid, 0)
+    ELSE 0
+  END)                                                  AS total_overdue
+FROM invoices i
+LEFT JOIN (
+  SELECT invoice_id, SUM(amount) AS paid
+  FROM invoice_payments
+  GROUP BY invoice_id
+) p_totals ON p_totals.invoice_id = i.id
+WHERE i.status != 'cancelled'
+GROUP BY i.company_id, i.type, i.currency;
