@@ -1,8 +1,10 @@
 import { serve } from 'https://deno.land/std@0.208.0/http/server.ts'
 import {
-  getTokenAndSign,
+  getTokenAndSignCached,
   WSAA_URLS,
 } from '../_shared/afipWsaa.js'
+import { createTokenStore } from '../_shared/supabaseTokenStore.js'
+import { loadAfipConfig, diagnoseConfig } from '../_shared/afipConfig.js'
 import {
   WSFEv1_URLS,
   getCbteTipo,
@@ -19,14 +21,12 @@ import {
  * defecto) y devuelve el CAE. El certificado y la clave privada viven acá
  * en el servidor — nunca llegan al browser.
  *
- * Variables de entorno requeridas:
- *   AFIP_CERT        — Certificado X.509 de homologación (PEM o base64 del PEM)
- *   AFIP_KEY         — Clave privada RSA 2048 (PEM o base64 del PEM)
- *   AFIP_CUIT        — CUIT (solo dígitos) que autorizó el certificado en WSASS
+ * Secretos requeridos (leídos por _shared/afipConfig.js):
+ *   Arca.crt / Arca.key / Arca.CUIT   (nombres legacy: AFIP_CERT / AFIP_KEY / AFIP_CUIT)
  *   AFIP_ENVIRONMENT — 'testing' (default) | 'production'
  *
  * Request body (JSON):
- *   action  {string}  — 'cae' (default) | 'dummy' | 'ptosVenta'
+ *   action  {string}  — 'cae' (default) | 'dummy' | 'ptosVenta' | 'diagnose'
  *   invoice {object}  — datos del comprobante (solo para 'cae'):
  *       tipo_comprobante, punto_de_venta, numero_comprobante, fecha_emision,
  *       moneda, tipo_cambio, emisor_cuit, receptor_cuit, consumidor_final_anonimo,
@@ -50,27 +50,6 @@ function json(data, status = 200) {
   })
 }
 
-function readPemEnv(value) {
-  if (!value) return null
-  // Si el secreto ya viene como PEM lo usamos directo; si viene en base64 lo decodificamos.
-  return value.includes('-----BEGIN') ? value : atob(value.replace(/\s+/g, ''))
-}
-
-function loadAfipConfig() {
-  const cert = readPemEnv(Deno.env.get('AFIP_CERT'))
-  const key = readPemEnv(Deno.env.get('AFIP_KEY'))
-  const cuit = Deno.env.get('AFIP_CUIT')
-  const environment = Deno.env.get('AFIP_ENVIRONMENT') ?? 'testing'
-
-  if (!cert || !key || !cuit) {
-    throw Object.assign(new Error(
-      'Credenciales AFIP no configuradas. ' +
-      'Configure AFIP_CERT, AFIP_KEY y AFIP_CUIT en las variables de entorno de Supabase.'
-    ), { status: 503 })
-  }
-  return { cert, key, cuit: String(cuit).replace(/\D/g, ''), environment }
-}
-
 serve(async (req) => {
   if (req.method === 'OPTIONS') {
     return new Response('ok', { headers: corsHeaders })
@@ -84,12 +63,30 @@ serve(async (req) => {
       return json({ error: 'Body inválido. Se esperaba JSON con action e invoice.' }, 400)
     }
 
-    const { cert, key, cuit, environment } = loadAfipConfig()
-    const wsaaUrl = WSAA_URLS[environment] ?? WSAA_URLS.testing
-    const wsfeUrl = WSFEv1_URLS[environment] ?? WSFEv1_URLS.testing
     const action = body.action ?? 'cae'
 
-    const { token, sign } = await getTokenAndSign({ privateKeyPem: key, certPem: cert, wsaaUrl })
+    if (action === 'diagnose') {
+      const diag = diagnoseConfig()
+      return json({ ok: true, ...diag })
+    }
+
+    const cfg = loadAfipConfig()
+    if (!cfg.cert || !cfg.key || !cfg.cuit) {
+      throw Object.assign(new Error(
+        'Credenciales ARCA no configuradas. Revisá los secretos Arca.crt, Arca.key y Arca.CUIT (action=diagnose para detalle).'
+      ), { status: 503 })
+    }
+    const { cert, key, cuit, environment } = cfg
+    const wsaaUrl = WSAA_URLS[environment] ?? WSAA_URLS.testing
+    const wsfeUrl = WSFEv1_URLS[environment] ?? WSFEv1_URLS.testing
+
+    const { token, sign } = await getTokenAndSignCached({
+      privateKeyPem: key,
+      certPem: cert,
+      wsaaUrl,
+      cuit,
+      store: createTokenStore(),
+    })
 
     if (action === 'dummy') {
       const status = await feDummy({ wsfeUrl })

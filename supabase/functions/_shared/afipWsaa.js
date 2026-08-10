@@ -300,3 +300,83 @@ export async function getTokenAndSign({ privateKeyPem, certPem, wsaaUrl, service
   const cmt = await signLoginTicketRequest(unsigned, { privateKeyPem, certPem })
   return loginCms({ cmtXml: cmt, wsaaUrl })
 }
+
+/** ¿El TA sigue vigente para reutilizarse (con margen de seguridad)? */
+export function isTokenValid(expirationTime, marginMs = 5 * 60 * 1000) {
+  if (!expirationTime) return false
+  const exp = new Date(expirationTime).getTime()
+  return Number.isFinite(exp) && exp > Date.now() + marginMs
+}
+
+/**
+ * Extrae el CUIT del sujeto de un certificado X.509 de AFIP/ARCA (fallback
+ * cuando no se configuró AFIP_CUIT). Tolera los formatos habituales:
+ *   CN=cuit:20305741461, ... | CN=20305741461 | serialNumber=CUIT 20305741461
+ * @param {string|null} certPem
+ * @returns {string|null}
+ */
+export function parseCuitFromCert(certPem) {
+  if (!certPem) return null
+  const text = String(certPem)
+  const patterns = [
+    /CN\s*=\s*cuit[:\s]*(\d{11})/i,
+    /CN\s*=\s*(\d{11})(?:[,]|$)/i,
+    /serialNumber\s*=\s*CUIT\s+(\d{11})/i,
+    /serialNumber\s*=\s*(\d{11})/i,
+  ]
+  for (const re of patterns) {
+    const m = text.match(re)
+    if (m) return m[1]
+  }
+  return null
+}
+
+/**
+ * Obtiene token+sign reutilizando una caché compartida (ej: tabla en
+ * Supabase) para que todas las invocaciones usen el MISMO TA.
+ *
+ * - Si hay TA vigente en el store, lo reutiliza (sin llamar a WSAA).
+ * - Si no, pide uno nuevo y lo persiste.
+ * - Si WSAA responde alreadyAuthenticated (otro proceso pidió un TA que
+ *   todavía no está en nuestro store), recarga del store y lo devuelve.
+ *
+ * @param {{ privateKeyPem: string, certPem: string, wsaaUrl: string,
+ *   service?: string, cuit?: string|number,
+ *   store: { loadToken: Function, saveToken: Function },
+ *   requestToken?: Function }} params
+ * @returns {Promise<{ token: string, sign: string, expirationTime: string|null, reused: boolean }>}
+ */
+export async function getTokenAndSignCached({
+  privateKeyPem,
+  certPem,
+  wsaaUrl,
+  service = 'wsfe',
+  cuit,
+  store,
+  requestToken = getTokenAndSign,
+}) {
+  if (!store?.loadToken || !store?.saveToken) {
+    throw new Error('getTokenAndSignCached requiere un store con loadToken() y saveToken()')
+  }
+  if (!cuit) {
+    throw new Error('getTokenAndSignCached requiere cuit para identificar el TA')
+  }
+
+  const cached = await store.loadToken({ service, cuit })
+  if (cached && isTokenValid(cached.expirationTime)) {
+    return { ...cached, reused: true }
+  }
+
+  try {
+    const fresh = await requestToken({ privateKeyPem, certPem, wsaaUrl, service })
+    await store.saveToken({ service, cuit, ...fresh })
+    return { ...fresh, reused: false }
+  } catch (err) {
+    const m = err instanceof Error ? err.message : String(err)
+    const again = await store.loadToken({ service, cuit })
+    if (/alreadyAuthenticated|autenticaci/i.test(m) && again && isTokenValid(again.expirationTime)) {
+      return { ...again, reused: true }
+    }
+    throw err
+  }
+}

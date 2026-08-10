@@ -1,10 +1,12 @@
 import { serve } from 'https://deno.land/std@0.208.0/http/server.ts'
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
 import {
-  getTokenAndSign,
+  getTokenAndSignCached,
   WSAA_URLS,
   extractTag,
 } from '../_shared/afipWsaa.js'
+import { createTokenStore } from '../_shared/supabaseTokenStore.js'
+import { loadAfipConfig } from '../_shared/afipConfig.js'
 import {
   WSFEv1_URLS,
   getCbteTipo,
@@ -19,10 +21,8 @@ import {
  * Valida un CAE contra WSFEv1 de ARCA usando FECompConsultar y actualiza el
  * campo `afip_status` de la factura correspondiente.
  *
- * Variables de entorno requeridas:
- *   AFIP_CERT        — Certificado X.509 (PEM o base64 del PEM)
- *   AFIP_KEY         — Clave privada (PEM o base64 del PEM)
- *   AFIP_CUIT        — CUIT del contribuyente que consulta
+ * Secretos requeridos (leídos por _shared/afipConfig.js):
+ *   Arca.crt / Arca.key / Arca.CUIT   (nombres legacy: AFIP_CERT / AFIP_KEY / AFIP_CUIT)
  *   AFIP_ENVIRONMENT — 'production' | 'testing' (default: 'testing')
  *
  * Request body (JSON):
@@ -48,21 +48,6 @@ function json(data, status = 200) {
   })
 }
 
-function readPemEnv(value) {
-  if (!value) return null
-  return value.includes('-----BEGIN') ? value : atob(value.replace(/\s+/g, ''))
-}
-
-function loadAfipConfig() {
-  const cert = readPemEnv(Deno.env.get('AFIP_CERT'))
-  const key = readPemEnv(Deno.env.get('AFIP_KEY'))
-  const cuit = Deno.env.get('AFIP_CUIT')
-  const environment = Deno.env.get('AFIP_ENVIRONMENT') ?? 'testing'
-
-  if (!cert || !key || !cuit) return null
-  return { cert, key, cuit: String(cuit).replace(/\D/g, ''), environment }
-}
-
 serve(async (req) => {
   if (req.method === 'OPTIONS') {
     return new Response('ok', { headers: corsHeaders })
@@ -83,11 +68,11 @@ serve(async (req) => {
     }
 
     const afip = loadAfipConfig()
-    if (!afip) {
+    if (!afip?.cert || !afip?.key || !afip?.cuit) {
       return json({
         isValid: false,
         status: 'not_configured',
-        message: 'Credenciales AFIP no configuradas. Configure AFIP_CERT, AFIP_KEY y AFIP_CUIT en las variables de entorno de Supabase.',
+        message: 'Credenciales ARCA no configuradas. Revisá los secretos Arca.crt, Arca.key y Arca.CUIT.',
       })
     }
 
@@ -95,7 +80,13 @@ serve(async (req) => {
     const wsaaUrl = WSAA_URLS[environment] ?? WSAA_URLS.testing
     const wsfeUrl = WSFEv1_URLS[environment] ?? WSFEv1_URLS.testing
 
-    const { token, sign } = await getTokenAndSign({ privateKeyPem: key, certPem: cert, wsaaUrl })
+    const { token, sign } = await getTokenAndSignCached({
+      privateKeyPem: key,
+      certPem: cert,
+      wsaaUrl,
+      cuit: afip.cuit,
+      store: createTokenStore(),
+    })
 
     let cbteTipo
     try {
