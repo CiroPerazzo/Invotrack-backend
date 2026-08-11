@@ -228,6 +228,7 @@ async function loginCms(cmsBase64) {
       const raw = innerBytes
       console.error(`DEBUG WSAA: payload interno sin token/sign NO es texto UTF-8 (${raw.length} bytes).`)
       console.error(`  hex(head): ${raw.subarray(0, 40).toString('hex')}`)
+      console.error(`  soap(redactado): ${redactSensitive(soapText).slice(0, 1500)}`)
       for (const [name, fn] of [
         ['gzip', zlib.gunzipSync],
         ['deflate', zlib.inflateSync],
