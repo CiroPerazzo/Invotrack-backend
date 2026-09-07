@@ -289,8 +289,16 @@ function isTokenValid(expirationTime) {
 export async function getTokenAndSign({ service = 'wsfe' } = {}) {
   loadEnv()
   const cuit = requireEnv('AFIP_CUIT')
-  const certPem = readFileSync(resolve(ROOT, requireEnv('AFIP_CERT_PATH')), 'utf8')
-  const keyPem = readFileSync(resolve(ROOT, requireEnv('AFIP_KEY_PATH')), 'utf8')
+  const certPath = resolve(ROOT, requireEnv('AFIP_CERT_PATH'))
+  const keyPath = resolve(ROOT, requireEnv('AFIP_KEY_PATH'))
+  if (!existsSync(certPath)) {
+    throw new Error(`No existe el certificado: ${certPath}. Generalo con scripts/arca/generar-csr.mjs y pegá el CSR en WSASS (ARCA homologación).`)
+  }
+  if (!existsSync(keyPath)) {
+    throw new Error(`No existe la clave privada: ${keyPath}. Guardá la clave generada por scripts/arca/generar-csr.mjs en esa ruta.`)
+  }
+  const certPem = readFileSync(certPath, 'utf8')
+  const keyPem = readFileSync(keyPath, 'utf8')
 
   const cached = readCache()
   if (

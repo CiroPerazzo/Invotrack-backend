@@ -21,5 +21,7 @@ ALTER TABLE arca_tokens ENABLE ROW LEVEL SECURITY;
 
 CREATE INDEX IF NOT EXISTS idx_arca_tokens_expiration ON arca_tokens(expiration_time);
 
-CREATE TRIGGER IF NOT EXISTS arca_tokens_updated_at BEFORE UPDATE ON arca_tokens
+-- PostgreSQL no soporta CREATE TRIGGER IF NOT EXISTS; se usa DROP + CREATE.
+DROP TRIGGER IF EXISTS arca_tokens_updated_at ON arca_tokens;
+CREATE TRIGGER arca_tokens_updated_at BEFORE UPDATE ON arca_tokens
   FOR EACH ROW EXECUTE FUNCTION update_updated_at();

@@ -12,6 +12,7 @@ import {
   fecaeSolicitar,
   feDummy,
   feParamGetPtosVenta,
+  feCompUltimoAutorizado,
 } from '../_shared/afipWsfe.js'
 
 /**
@@ -105,7 +106,24 @@ serve(async (req) => {
     }
 
     const cbteTipo = getCbteTipo(invoice.tipo_comprobante)
-    const { cabecera, detalle } = mapInvoiceToCaeRequest({ invoice, cbteTipo })
+
+    // El número se consulta a ARCA (FECompUltimoAutorizado) si el request no
+    // lo trae. Nunca se hardcodea ni se arranca con 1 a ciegas.
+    const ptoVta = Number(invoice.punto_de_venta) || 1
+    let numeroComprobante = Number(invoice.numero_comprobante) || 0
+    if (numeroComprobante <= 0) {
+      const ultimo = await feCompUltimoAutorizado({ wsfeUrl, token, sign, cuit, ptoVta, cbteTipo })
+      if (ultimo.errores.length > 0) {
+        const msg = ultimo.errores.map((e) => `[${e.code}] ${e.msg}`).join(' | ')
+        return json({ ok: false, error: `FECompUltimoAutorizado: ${msg}` }, 422)
+      }
+      numeroComprobante = (ultimo.cbteNro ?? 0) + 1
+    }
+
+    const { cabecera, detalle } = mapInvoiceToCaeRequest({
+      invoice: { ...invoice, numero_comprobante: numeroComprobante },
+      cbteTipo,
+    })
 
     const result = await fecaeSolicitar({ wsfeUrl, token, sign, cuit, cabecera, detalle })
 

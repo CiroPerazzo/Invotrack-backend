@@ -360,6 +360,40 @@ export async function feParamGetPtosVenta({ wsfeUrl, token, sign, cuit }) {
 }
 
 /**
+ * Parsea la respuesta de FECompUltimoAutorizado.
+ * @param {string} xml
+ * @returns {{ cbteNro: number|null, errores: Array<{code,msg}> }}
+ */
+export function parseFeCompUltimoAutorizado(xml) {
+  const errores = extractErrores(xml)
+  if (errores.length > 0) return { cbteNro: null, errores }
+  const n = Number(extractTag(xml, 'CbteNro'))
+  return { cbteNro: Number.isFinite(n) ? n : null, errores: [] }
+}
+
+/**
+ * FECompUltimoAutorizado — último número autorizado para un punto de venta y
+ * tipo de comprobante. Permite calcular el siguiente número con ARCA.
+ * @param {{ wsfeUrl: string, token: string, sign: string, cuit: string|number, ptoVta: number, cbteTipo: number }} params
+ * @returns {Promise<{ cbteNro: number|null, errores: Array<{code,msg}> }>}
+ */
+export async function feCompUltimoAutorizado({ wsfeUrl, token, sign, cuit, ptoVta, cbteTipo }) {
+  const body = soapEnvelope(
+    'FECompUltimoAutorizado',
+    buildAuth({ token, sign, cuit }) +
+      `<PtoVta>${ptoVta}</PtoVta><CbteTipo>${cbteTipo}</CbteTipo>`
+  )
+  const res = await fetch(wsfeUrl, {
+    method: 'POST',
+    headers: soapHeaders('FECompUltimoAutorizado'),
+    body,
+  })
+  const text = await res.text()
+  if (!res.ok) throw new Error(`WSFEv1 respondió HTTP ${res.status}: ${text.slice(0, 500)}`)
+  return parseFeCompUltimoAutorizado(text)
+}
+
+/**
  * FECAESolicitar — solicita el CAE para un comprobante.
  * @param {{ wsfeUrl: string, token: string, sign: string, cuit: string|number, cabecera: object, detalle: object[] }} params
  * @returns {Promise<object>} resultado de parseCaeResponse()

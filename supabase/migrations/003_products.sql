@@ -26,5 +26,6 @@ CREATE POLICY "products_own" ON products
 CREATE INDEX IF NOT EXISTS idx_products_company_id ON products(company_id);
 CREATE INDEX IF NOT EXISTS idx_products_name ON products(name);
 
-CREATE TRIGGER IF NOT EXISTS products_updated_at BEFORE UPDATE ON products
+DROP TRIGGER IF EXISTS products_updated_at ON products;
+CREATE TRIGGER products_updated_at BEFORE UPDATE ON products
   FOR EACH ROW EXECUTE FUNCTION update_updated_at();
