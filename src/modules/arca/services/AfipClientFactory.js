@@ -15,7 +15,8 @@ export function createAfipClient(overrides = {}) {
   const options = {
     CUIT: overrides.cuit ?? env.afip.cuit,
     access_token: env.afip.accessToken,
-    production: overrides.production ?? env.afip.production,
+    // BLOQUEO DE PRODUCCIÓN: homologación siempre, ignore cualquier override.
+    production: env.afip.production === true,
   }
 
   const cert = overrides.cert ?? env.afip.cert

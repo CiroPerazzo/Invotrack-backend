@@ -41,6 +41,9 @@ const CBTE_TIPO_MAP = {
 const MONEDA_MAP = { ARS: 'PES', USD: 'USD', EUR: 'EUR', BRL: 'BRL' }
 const IVA_ID_MAP = { 0: 3, 2.5: 9, 5: 8, 10.5: 4, 21: 5, 27: 6 }
 
+/** Condición IVA receptor (InvoTrack) → CondicionIVAReceptorId ARCA (RG 5616). */
+const CONDICION_IVA_RECEPTOR_MAP = { RI: 1, EX: 4, CF: 5, MO: 6, RS: 1 }
+
 // ───────────────────────────── WSAA helpers ────────────────────────────────
 
 function pad2(n) {
@@ -48,8 +51,6 @@ function pad2(n) {
 }
 
 function formatBuenosAiresTime(date) {
-  // ARCA exige el formato XML Schema dateTime: 2018-01-29T13:52:57.467-03:00
-  // (con milisegundos y offset -03:00, sin horario de verano).
   const local = new Date(date.getTime() - 3 * 60 * 60 * 1000)
   const ms = String(local.getUTCMilliseconds()).padStart(3, '0')
   return (
@@ -77,14 +78,6 @@ function extractPemBody(pem, label) {
   return m[1].replace(/\s+/g, '')
 }
 
-/**
- * Construye el CMS PKCS#7 (SignedData) que ARCA espera en in0 de loginCms:
- * contiene el TRA firmado con SHA1+RSA, los atributos autenticados estándar
- * (contentType, messageDigest, signingTime) y el certificado del firmante.
- *
- * El DigestAlgorithm debe ser SHA1 (lo que soporta WSAA).
- * @returns {string} base64 del DER CMS
- */
 function signTraAsCms(traXml, { certPem, keyPem }) {
   const cert = pki.certificateFromPem(certPem)
   const key = pki.privateKeyFromPem(keyPem)
@@ -143,9 +136,6 @@ function decodeXmlEntities(s) {
 }
 
 function parseLoginCmsResponse(xml) {
-  // El SOAP devuelve <loginCmsReturn> con el loginTicketResponse embebido como
-  // texto con entidades XML escapadas (&lt;token&gt; etc.). Lo decodificamos
-  // antes de extraer los campos.
   const loginReturn = extractTag(xml, 'loginCmsReturn') || extractTag(xml, 'loginReturn')
   if (!loginReturn) {
     throw new Error(`Respuesta de WSAA sin loginReturn. XML crudo: ${String(xml).slice(0, 1200)}`)
@@ -266,6 +256,10 @@ function mapInvoiceToCaeRequest({ invoice, cbteTipo }) {
   const monCotiz = moneda === 'ARS' ? 1 : Number(invoice.tipo_cambio) || 1
   const esAnonimo = invoice.consumidor_final_anonimo === true
   const receptorCuit = String(invoice.receptor_cuit ?? '').replace(/\D/g, '')
+  const condicionReceptor = esAnonimo
+    ? 5
+    : (CONDICION_IVA_RECEPTOR_MAP[invoice.receptor_condicion_iva] ?? 5)
+  const docTipo = esAnonimo || !receptorCuit ? 99 : 80
   const docNro = esAnonimo || !receptorCuit ? 0 : Number(receptorCuit)
   const cbteFch = fechaEmisionToAfip(invoice.fecha_emision)
   const iva = computeIvaFromItems(invoice.items ?? [])
@@ -279,8 +273,9 @@ function mapInvoiceToCaeRequest({ invoice, cbteTipo }) {
   const cabecera = { ptoVta: Number(invoice.punto_de_venta) || 1, cbteTipo, cantReg: 1 }
   const detalle = [{
     concepto: 1,
-    docTipo: 80,
+    docTipo,
     docNro,
+    condicionIVAReceptorId: condicionReceptor,
     cbteDesde: numero,
     cbteHasta: numero,
     cbteFch,
@@ -317,6 +312,7 @@ function buildDetalle(d) {
     `<Concepto>${d.concepto ?? 1}</Concepto>`,
     `<DocTipo>${d.docTipo ?? 80}</DocTipo>`,
     `<DocNro>${d.docNro ?? 0}</DocNro>`,
+    `<CondicionIVAReceptorId>${d.condicionIVAReceptorId ?? 5}</CondicionIVAReceptorId>`,
     `<CbteDesde>${d.cbteDesde}</CbteDesde>`,
     `<CbteHasta>${d.cbteHasta ?? d.cbteDesde}</CbteHasta>`,
     `<CbteFch>${d.cbteFch}</CbteFch>`,
@@ -568,11 +564,14 @@ async function handler(req) {
 
     if (action === 'diagnose') {
       const cfg = loadAfipConfig()
+      const cuitFromCert = cfg.cert ? parseCuitFromCert(cfg.cert) : null
       return json({
         ok: true,
         secrets: cfg.secrets,
         cuit: cfg.cuit ?? null,
+        cuitFromCert,
         cuitSource: cfg.cuit ? (cfg.secrets.cuit ? 'Arca.CUIT' : 'certificado') : null,
+        cuitMatch: !cuitFromCert || !cfg.cuit || cuitFromCert === cfg.cuit,
         environment: cfg.environment,
         completo: Boolean(cfg.cert && cfg.key && cfg.cuit),
       })

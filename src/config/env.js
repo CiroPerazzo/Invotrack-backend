@@ -18,8 +18,10 @@ export const env = {
   },
   afip: {
     accessToken: process.env.AFIPSDK_ACCESS_TOKEN ?? '',
-    environment: process.env.AFIP_ENVIRONMENT ?? 'development',
-    production: process.env.AFIP_ENVIRONMENT === 'production',
+    // BLOQUEO DE PRODUCCIÓN: el server queda forzado a homologación.
+    // Para emitir comprobantes reales hay que desactivar este bloqueo a propósito.
+    environment: 'testing',
+    production: false,
     cuit: process.env.AFIP_CUIT ? Number(process.env.AFIP_CUIT.replace(/\D/g, '')) : 20409378472,
     cert: process.env.AFIP_CERT ?? null,
     key: process.env.AFIP_KEY ?? null,

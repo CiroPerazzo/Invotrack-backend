@@ -7,8 +7,17 @@
  *   Arca.CUIT  → CUIT de 11 dígitos (fallback: se extrae del certificado)
  *
  * También soporta los nombres legacy AFIP_CERT / AFIP_KEY / AFIP_CUIT.
+ *
+ * BLOQUEO DE PRODUCCIÓN (FIREWALL):
+ *   Este sistema está deliberadamente atado a HOMOLOGACIÓN. La variable
+ *   AFIP_ENVIRONMENT se IGNORA por completo y el ambiente resuelto es siempre
+ *   'testing'. Mientras este bloqueo esté activo es IMPOSIBLE emitir un
+ *   comprobante real contra ARCA producción.
  */
 import { parseCuitFromCert } from './afipWsaa.js'
+
+/** Ambiente forzado por configuración. Para activar producción hay que borrar este bloqueo a propósito. */
+const FORZADO_A_TESTING = true
 
 function readPemEnv(value) {
   if (!value) return null
@@ -37,7 +46,10 @@ export function loadAfipConfig() {
   const key = readPemEnv(Deno.env.get('Arca.key') ?? Deno.env.get('AFIP_KEY'))
   const cuit = (Deno.env.get('Arca.CUIT') ?? Deno.env.get('AFIP_CUIT') ?? '').replace(/\D/g, '') ||
     parseCuitFromCert(cert)
-  const environment = Deno.env.get('AFIP_ENVIRONMENT') ?? 'testing'
+  // AFIP_ENVIRONMENT se ignora a propósito: siempre homologación.
+  const environment = FORZADO_A_TESTING
+    ? 'testing'
+    : (Deno.env.get('AFIP_ENVIRONMENT') ?? 'testing')
 
   if (!cert || !key || !cuit) {
     return { cert: null, key: null, cuit: null, environment, secrets }
