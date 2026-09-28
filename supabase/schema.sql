@@ -28,6 +28,17 @@ CREATE TABLE companies (
   address TEXT,
   tax_condition TEXT,
   logo_url TEXT,
+  -- Ficha fiscal (ver migrations/006_company_fiscal_profile.sql)
+  entity_type TEXT NOT NULL DEFAULT 'empresa'
+    CHECK (entity_type IN ('persona_humana', 'empresa')),
+  activity TEXT,
+  street TEXT,
+  street_number TEXT,
+  city TEXT,
+  province TEXT,
+  phone TEXT,
+  email TEXT,
+  default_sale_point INTEGER DEFAULT 1,
   owner_id UUID REFERENCES profiles(id),
   created_at TIMESTAMPTZ DEFAULT NOW(),
   updated_at TIMESTAMPTZ DEFAULT NOW()
@@ -312,6 +323,9 @@ CREATE TRIGGER clients_updated_at BEFORE UPDATE ON clients
   FOR EACH ROW EXECUTE FUNCTION update_updated_at();
 
 CREATE TRIGGER providers_updated_at BEFORE UPDATE ON providers
+  FOR EACH ROW EXECUTE FUNCTION update_updated_at();
+
+CREATE TRIGGER companies_updated_at BEFORE UPDATE ON companies
   FOR EACH ROW EXECUTE FUNCTION update_updated_at();
 
 -- ============================================================
