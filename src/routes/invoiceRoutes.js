@@ -1,6 +1,6 @@
 import { Router } from 'express'
 import { invoiceController } from '../controllers/InvoiceController.js'
-import { authMiddleware, companyScopeMiddleware } from '../middleware/authMiddleware.js'
+import { authMiddleware, companyScopeMiddleware, requireCompanyRole } from '../middleware/authMiddleware.js'
 
 const router = Router()
 
@@ -10,6 +10,7 @@ router.post(
   '/invoices/emit',
   authMiddleware,
   companyScopeMiddleware,
+  requireCompanyRole('admin', 'accountant'),
   invoiceController.emit
 )
 

@@ -1,8 +1,8 @@
-import { supabaseAdmin } from '../config/supabase.js'
+import { createAdminClient } from '../config/supabase.js'
 
 export class InvoiceRepository {
   async assertNotDuplicate({ companyId, invoiceNumber, tipoComprobante }) {
-    const { data } = await supabaseAdmin
+    const { data } = await createAdminClient()
       .from('invoices')
       .select('id')
       .eq('company_id', companyId)
@@ -18,6 +18,7 @@ export class InvoiceRepository {
   }
 
   async createIssuedInvoice({ invoice, items, userId, arcaResult }) {
+    const supabaseAdmin = createAdminClient()
     const invoiceNumber =
       `${String(arcaResult.puntoDeVenta).padStart(4, '0')}-` +
       `${String(arcaResult.numeroComprobante).padStart(8, '0')}`

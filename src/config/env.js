@@ -13,8 +13,9 @@ export const env = {
   nodeEnv: process.env.NODE_ENV ?? 'development',
   corsOrigin: process.env.CORS_ORIGIN ?? 'http://localhost:5173',
   supabase: {
-    url: required('SUPABASE_URL'),
-    serviceRoleKey: required('SUPABASE_SERVICE_ROLE_KEY'),
+    url: process.env.SUPABASE_URL ?? required('VITE_SUPABASE_URL'),
+    anonKey: process.env.SUPABASE_ANON_KEY ?? required('VITE_SUPABASE_ANON_KEY'),
+    serviceRoleKey: process.env.SUPABASE_SERVICE_ROLE_KEY ?? '',
   },
   afip: {
     accessToken: process.env.AFIPSDK_ACCESS_TOKEN ?? '',

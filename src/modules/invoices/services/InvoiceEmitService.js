@@ -1,5 +1,5 @@
-import { createAfipClient } from '../modules/arca/services/AfipClientFactory.js'
-import { ElectronicBillingService } from '../modules/arca/services/ElectronicBillingService.js'
+import { createAfipClient } from '../../arca/services/AfipClientFactory.js'
+import { ElectronicBillingService } from '../../arca/services/ElectronicBillingService.js'
 import { InvoiceRepository } from '../../../repositories/InvoiceRepository.js'
 
 export class InvoiceEmitService {
