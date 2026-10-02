@@ -1,4 +1,11 @@
-import 'dotenv/config'
+import { config } from 'dotenv'
+import { resolve } from 'node:path'
+
+// La configuración del server tiene prioridad; el .env raíz aporta las
+// credenciales públicas de Supabase cuando no hay server/.env.
+const configDirectory = import.meta.dirname ?? resolve(process.cwd(), 'server/src/config')
+config({ path: resolve(configDirectory, '../../.env') })
+config({ path: resolve(configDirectory, '../../../.env') })
 
 function required(name) {
   const value = process.env[name]
@@ -13,8 +20,8 @@ export const env = {
   nodeEnv: process.env.NODE_ENV ?? 'development',
   corsOrigin: process.env.CORS_ORIGIN ?? 'http://localhost:5173',
   supabase: {
-    url: process.env.SUPABASE_URL ?? required('VITE_SUPABASE_URL'),
-    anonKey: process.env.SUPABASE_ANON_KEY ?? required('VITE_SUPABASE_ANON_KEY'),
+    url: process.env.SUPABASE_URL?.trim() || required('VITE_SUPABASE_URL').trim(),
+    anonKey: process.env.SUPABASE_ANON_KEY?.trim() || required('VITE_SUPABASE_ANON_KEY').trim(),
     serviceRoleKey: process.env.SUPABASE_SERVICE_ROLE_KEY ?? '',
   },
   afip: {
