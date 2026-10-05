@@ -1,0 +1,12 @@
+# Configuración del proyecto para el CLI de Supabase (supabase link / db push /
+# functions deploy). El project_id es el ref que aparece en la URL de la DB.
+project_id = "bahuflaajjdqdyestjcj"
+
+# Edge functions de ARCA: solo las invoca un usuario autenticado de la app.
+# Las credenciales (Arca.crt / Arca.key / Arca.CUIT) las leen en runtime desde
+# Settings → Edge Functions → Secrets; nunca llegan al browser ni a este repo.
+[functions.afip-emit]
+verify_jwt = true
+
+[functions.afip-validate]
+verify_jwt = true
