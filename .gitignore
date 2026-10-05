@@ -1,0 +1,12 @@
+node_modules/
+.env
+.env.local
+.env.*.local
+certificados/
+scripts/arca/.wsaa-token-cache.json
+scripts/arca/.cae-intents.json
+scripts/arca/salida/
+*.key
+*.pem
+*.log
+coverage/
