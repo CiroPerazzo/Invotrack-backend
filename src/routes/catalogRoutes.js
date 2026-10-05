@@ -23,7 +23,7 @@ const schemas = {
     price: z.coerce.number().finite().nonnegative(),
     unit: z.string().max(30).optional(),
     stock: z.coerce.number().finite().nonnegative().optional(),
-    provider_id: uuid.nullable().optional(),
+    provider_id: uuid,
   }),
 }
 
