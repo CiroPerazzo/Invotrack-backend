@@ -2,12 +2,13 @@ import { createUserClient } from '../config/supabase.js'
 
 export async function authMiddleware(req, res, next) {
   try {
-    const header = req.headers.authorization
-    if (!header?.startsWith('Bearer ')) {
+    const cookie = req.headers.cookie?.split(';').map((part) => part.trim())
+      .find((part) => part.startsWith('accessToken='))
+    const token = cookie ? decodeURIComponent(cookie.slice('accessToken='.length)) : null
+    if (!token) {
       return res.status(401).json({ error: 'Token de autenticación requerido' })
     }
 
-    const token = header.slice(7)
     const db = createUserClient(token)
     const { data: { user }, error } = await db.auth.getUser(token)
     if (error || !user) {
