@@ -27,6 +27,8 @@
  *
  * Request JSON:
  *   { action: 'cae'|'dummy'|'ptosVenta'|'diagnose', invoice? }
+ *   Para 'cae', invoice.id es un UUID estable por factura (también borradores)
+ *   e invoice.company_id identifica la empresa. Requiere migración 009.
  *
  * Response JSON (action 'cae'):
  *   ok, resultado, numeroComprobante, cae, caeVencimiento, errores, observaciones
@@ -545,6 +547,61 @@ function createTokenStore() {
   }
 }
 
+// The unique reservation is shared with Express and survives failed calls.
+// Keep this file self-contained for deployments through the Dashboard editor.
+function createCaeStore() {
+  const url = (Deno.env.get('SUPABASE_URL') ?? '').replace(/\/$/, '')
+  const key = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')
+  if (!url || !key) {
+    throw Object.assign(new Error('Supabase no está configurado para proteger la solicitud de CAE'), { status: 503 })
+  }
+
+  async function request(path, { method = 'GET', body, authorization = `Bearer ${key}` } = {}) {
+    const response = await fetch(`${url}${path}`, {
+      method,
+      headers: { apikey: key, Authorization: authorization, 'Content-Type': 'application/json' },
+      ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+    })
+    if (!response.ok) {
+      const error = await response.json().catch(() => ({}))
+      const status = response.status === 401 ? 401
+        : ({ '23505': 409, '42501': 403, '22023': 400, '22P02': 400 }[error.code] ?? 503)
+      throw Object.assign(new Error(status >= 500
+        ? 'No se pudo registrar la solicitud de CAE. Verificá que la migración 009 esté aplicada.'
+        : (error.message ?? error.msg ?? 'Sesión inválida')), { status })
+    }
+    return response.status === 204 ? null : response.json()
+  }
+
+  return {
+    async reserve(invoice, authorization) {
+      if (!/^Bearer \S+$/i.test(authorization ?? '')) {
+        throw Object.assign(new Error('Sesión requerida para solicitar el CAE'), { status: 401 })
+      }
+      const user = await request('/auth/v1/user', { authorization })
+      if (!user?.id) throw Object.assign(new Error('Sesión inválida'), { status: 401 })
+      await request('/rest/v1/rpc/reserve_invoice_cae', {
+        method: 'POST',
+        body: { p_invoice_id: invoice.id, p_company_id: invoice.company_id, p_user_id: user.id },
+      })
+    },
+    async record(invoice, result) {
+      const state = result.ok && result.cae ? 'authorized'
+        : result.resultado === 'R' ? 'rejected' : 'unknown'
+      await request(`/rest/v1/invoice_cae_requests?invoice_id=eq.${encodeURIComponent(invoice.id)}&company_id=eq.${encodeURIComponent(invoice.company_id)}`, {
+        method: 'PATCH',
+        body: { state, arca_result: result, updated_at: new Date().toISOString() },
+      })
+    },
+    async prepare(invoice, requestData) {
+      await request(`/rest/v1/invoice_cae_requests?invoice_id=eq.${encodeURIComponent(invoice.id)}&company_id=eq.${encodeURIComponent(invoice.company_id)}`, {
+        method: 'PATCH',
+        body: { arca_request: requestData, updated_at: new Date().toISOString() },
+      })
+    },
+  }
+}
+
 // ──────────────────────────────── Handler ──────────────────────────────────
 
 const corsHeaders = {
@@ -564,6 +621,7 @@ async function handler(req) {
   if (req.method === 'OPTIONS') {
     return new Response('ok', { headers: corsHeaders })
   }
+  if (req.method !== 'POST') return json({ error: 'Método no permitido' }, 405)
   try {
     let body
     try {
@@ -572,7 +630,25 @@ async function handler(req) {
       return json({ error: 'Body inválido. Se esperaba JSON con action e invoice.' }, 400)
     }
 
+    if (!body || typeof body !== 'object' || Array.isArray(body)) {
+      return json({ error: 'Body inválido' }, 400)
+    }
     const action = body.action ?? 'cae'
+    if (!['cae', 'dummy', 'ptosVenta', 'diagnose'].includes(action)) {
+      return json({ error: 'Acción inválida' }, 400)
+    }
+    if (action === 'cae') {
+      const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+      if (!uuid.test(body.invoice?.id ?? '') || !uuid.test(body.invoice?.company_id ?? '')) {
+        return json({ error: 'invoice.id y company_id deben ser UUID; conservá el mismo id para todos los intentos de esta factura' }, 400)
+      }
+      if (body.invoice.type && body.invoice.type !== 'receivable') {
+        return json({ error: 'Solo se pueden emitir facturas de venta' }, 400)
+      }
+      if (String(body.invoice.cae ?? '').trim() || ['issued', 'authorized', 'valid'].includes(body.invoice.afip_status)) {
+        return json({ error: 'Esta factura ya tiene un CAE. No se puede solicitar otro.' }, 409)
+      }
+    }
 
     if (action === 'diagnose') {
       const cfg = loadAfipConfig()
@@ -640,7 +716,12 @@ async function handler(req) {
       cbteTipo,
     })
 
+    const caeStore = createCaeStore()
+    await caeStore.reserve(invoice, req.headers.get('Authorization'))
+    await caeStore.prepare(invoice, { cuit, environment, cabecera, detalle })
+    // Never delete the reservation, including on timeouts or persistence errors.
     const result = await fecaeSolicitar({ wsfeUrl, token, sign, cuit, cabecera, detalle })
+    await caeStore.record(invoice, { ...result, numeroComprobante })
 
     if (result.errores.length > 0) {
       const msg = result.errores.map((e) => `[${e.code}] ${e.msg}`).join(' | ')

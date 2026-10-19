@@ -20,7 +20,22 @@ export class InvoiceEmitService {
       throw new Error('Solo se pueden emitir facturas de venta (receivable) con ARCA')
     }
 
-    const arcaResult = await this.billing.emitInvoice({ ...invoice, items })
+    if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(invoice.id ?? '')) {
+      throw new Error('invoice.id debe ser un UUID estable para solicitar el CAE una sola vez')
+    }
+    if (String(invoice.cae ?? '').trim() || ['issued', 'authorized', 'valid'].includes(invoice.afip_status)) {
+      throw Object.assign(new Error('Esta factura ya tiene un CAE. No se puede solicitar otro.'), { status: 409 })
+    }
+
+    // Reserve durably before calling ARCA. Never release this reservation on
+    // errors: a timeout can hide a successful authorization.
+    await this.repo.reserveCae({ invoiceId: invoice.id, companyId: invoice.company_id, userId })
+    const arcaResult = await this.billing.emitInvoice({ ...invoice, items }, {
+      beforeRequest: (request) => this.repo.recordCaeRequest({
+        invoiceId: invoice.id, companyId: invoice.company_id, request,
+      }),
+    })
+    await this.repo.recordCaeResult({ invoiceId: invoice.id, companyId: invoice.company_id, arcaResult })
     const saved = await this.repo.createIssuedInvoice({
       invoice,
       items,

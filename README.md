@@ -37,6 +37,81 @@ esta ruta Express.
 
 ## Infraestructura Supabase
 
+### Puntos de venta
+
+Aplicá `supabase/migrations/010_sale_points.sql` en el SQL Editor del proyecto
+para crear `public.sale_points`. Requiere las funciones de permisos de
+`001_rls_company_isolation.sql`; no depende de la migración 009.
+
+Cada punto guarda empresa, número, nombre, domicilio, ambiente, sistema de
+facturación, estado activo, selección predeterminada y fechas de auditoría.
+El número se guarda como entero y se muestra con cinco dígitos: `3` → `00003`.
+El sistema es `web_services`; el ambiente predeterminado es `testing`, como
+la configuración actual de emisión. El mismo número puede existir en empresas
+o ambientes distintos, pero no repetirse dentro de la misma combinación.
+
+Propietarios y administradores pueden administrar y eliminar los registros;
+accountants pueden crear y editar; viewers solo pueden consultar los de su
+empresa. RLS también comprueba la empresa de destino al editar un registro.
+
+Para elegir el predeterminado desde un cliente Supabase autenticado, llamá
+`set_default_sale_point` con `p_company_id`, `p_sale_point_id` y
+`p_environment` (`testing` por defecto). Solo admite puntos activos y cambia
+la selección en una transacción. Al desactivar directamente un predeterminado,
+hay que enviar también `is_default: false` o elegir antes otro punto.
+
+Esta migración crea el catálogo y sus permisos. No modifica automáticamente el
+campo anterior `companies.default_sale_point` ni agrega un selector al frontend.
+El alta fiscal de los puntos sigue realizándose en ARCA.
+
+### Una sola solicitud de CAE por factura
+
+Antes de desplegar estos cambios, aplicá
+`supabase/migrations/009_invoice_cae_requests.sql` en el proyecto y volvé a
+desplegar la Edge Function `afip-emit`. Reiniciá también la API Express.
+La migración agrega un registro permanente compartido por ambas vías de emisión.
+
+Tanto `afip-emit` como `POST /api/v1/invoices/emit` requieren un `id` UUID
+estable y `company_id` en la factura. El frontend debe generar el UUID una
+sola vez al iniciar el borrador (`crypto.randomUUID()`), conservarlo ante
+errores, recargas y reintentos, y usarlo también al guardar la factura.
+Para una factura guardada debe enviar su `id` existente. No generar un UUID
+nuevo al pulsar «Solicitar CAE». Sin ese identificador se rechaza la solicitud.
+El repositorio contiguo `Invotrack-frontend` ya implementa este comportamiento:
+conserva el UUID del borrador en la URL y deshabilita el botón después del
+primer intento, también al recargar la misma pestaña.
+
+La primera llamada reserva el identificador en PostgreSQL antes de solicitar
+el CAE. Una segunda llamada, incluso simultánea, recibe **409** y no vuelve
+a emitir. También se rechazan facturas que ya tienen un CAE en la base.
+El usuario debe ser propietario, admin o accountant de la empresa.
+
+El bloqueo se conserva incluso si ARCA rechaza la solicitud, hay un timeout
+o falla el guardado posterior. No se libera automáticamente: el comprobante
+podría haber quedado autorizado. `invoice_cae_requests` conserva los datos
+del pedido y la respuesta recibida para consultar el comprobante en ARCA y
+recuperar su resultado sin solicitar un nuevo CAE. No borrar ese registro
+para reintentar. La respuesta de `afip-emit` mantiene su formato habitual.
+
+Verificá con una factura de homologación: enviá dos llamadas simultáneas con
+el mismo UUID y luego repetí la llamada. Solo una debe llegar a
+`FECAESolicitar`; las restantes deben recibir 409. Dos facturas distintas
+pueden tener datos comerciales idénticos, pero deben tener UUID distintos.
+
+### Registro sin correo de confirmación
+
+Las cuentas nuevas deben poder iniciar sesión al registrarse, sin recibir un
+correo de confirmación. `supabase/config.toml` define
+`auth.email.enable_confirmations = false` para el entorno local.
+
+Para el proyecto alojado, abrí Supabase Dashboard → Authentication → Sign In /
+Providers → Email, desactivá **Confirm email** y guardá los cambios. Editar
+`config.toml` por sí solo no actualiza el proyecto remoto. Este ajuste lo
+gestiona Supabase Auth; no requiere cambios en `.env` ni en las rutas Express.
+
+Para verificarlo, registrá una cuenta nueva desde el frontend y comprobá que
+Supabase devuelve una sesión y permite ingresar sin confirmar el correo.
+
 ### Órdenes de compra
 
 Aplicá `supabase/migrations/008_purchase_orders.sql` en el SQL Editor del

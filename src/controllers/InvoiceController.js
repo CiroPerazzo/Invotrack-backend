@@ -19,7 +19,8 @@ export const invoiceController = {
 
       res.status(201).json(result)
     } catch (err) {
-      err.status = err.message?.includes('ARCA') ? 422 : 400
+      err.status ??= ({ '23505': 409, '42501': 403 }[err.code]
+        ?? (err.message?.includes('ARCA') ? 422 : 400))
       next(err)
     }
   },

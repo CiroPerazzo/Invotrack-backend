@@ -138,7 +138,7 @@ export class ElectronicBillingService {
     this.getClient = afipClientFactory
   }
 
-  async emitInvoice(invoice) {
+  async emitInvoice(invoice, { beforeRequest } = {}) {
     const afip = this.getClient()
     const puntoVenta = Number(invoice.punto_de_venta ?? 1)
     const cbteTipo = getAfipCbteTipo(invoice.tipo_comprobante ?? 'Factura B')
@@ -147,6 +147,7 @@ export class ElectronicBillingService {
     const nextNumber = lastVoucher + 1
 
     const voucherData = mapInvoiceToVoucher(invoice, nextNumber)
+    await beforeRequest?.(voucherData)
     const result = await afip.ElectronicBilling.createVoucher(voucherData)
 
     if (!result?.CAE) {

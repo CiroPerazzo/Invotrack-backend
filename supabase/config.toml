@@ -2,6 +2,11 @@
 # functions deploy). El project_id es el ref que aparece en la URL de la DB.
 project_id = "bahuflaajjdqdyestjcj"
 
+# Las cuentas nuevas pueden iniciar sesión sin confirmar el correo.
+# En el proyecto alojado, desactivar también Confirm Email en Supabase Auth.
+[auth.email]
+enable_confirmations = false
+
 # Edge functions de ARCA: solo las invoca un usuario autenticado de la app.
 # Las credenciales (Arca.crt / Arca.key / Arca.CUIT) las leen en runtime desde
 # Settings → Edge Functions → Secrets; nunca llegan al browser ni a este repo.
