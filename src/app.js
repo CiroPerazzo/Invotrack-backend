@@ -4,7 +4,6 @@ import { env } from './config/env.js'
 import invoiceRoutes from './routes/invoiceRoutes.js'
 import catalogRoutes from './routes/catalogRoutes.js'
 import authRoutes from './routes/authRoutes.js'
-import purchaseOrderRoutes from './routes/purchaseOrderRoutes.js'
 import { errorHandler } from './middleware/errorHandler.js'
 
 const app = express()
@@ -20,7 +19,6 @@ app.use('/api/v1', (req, res, next) => {
 })
 
 app.use('/api/v1', authRoutes)
-app.use('/api/v1', purchaseOrderRoutes)
 app.use('/api/v1', invoiceRoutes)
 app.use('/api/v1', catalogRoutes)
 
