@@ -3,7 +3,7 @@ import { serve } from 'https://deno.land/std@0.208.0/http/server.ts'
 /**
  * Edge Function: ocr-gpt4v
  *
- * Recibe una imagen de factura en base64 y usa GPT-4 Vision para extraer
+ * Recibe una imagen o PDF de factura en base64 y usa GPT-4o para extraer
  * todos los datos del comprobante fiscal argentino.
  *
  * La API key de OpenAI vive acá en el servidor — nunca llega al browser.
@@ -12,8 +12,9 @@ import { serve } from 'https://deno.land/std@0.208.0/http/server.ts'
  *   OPENAI_API_KEY — tu API key de OpenAI (sk-...)
  *
  * Request body (JSON):
- *   fileBase64  {string}  — imagen en base64
+ *   fileBase64  {string}  — archivo en base64
  *   mimeType    {string}  — 'image/jpeg' | 'image/png' | 'image/webp' | 'application/pdf'
+ *   fileName    {string}  — nombre del archivo (opcional, para PDFs y logging)
  *
  * Response body (JSON):
  *   rawText     {string}  — texto estructurado extraído por GPT-4
@@ -50,8 +51,8 @@ CONDICION_IVA: [RI / MO / EX / CF / RS]
 DOMICILIO: [dirección]
 
 ITEMS:
+[una línea por cada producto o servicio]
 - DESCRIPCION: [texto] | CANTIDAD: [número] | PRECIO_UNITARIO: [número] | ALICUOTA_IVA: [0/10.5/21/27] | SUBTOTAL_NETO: [número]
-(repetir para cada ítem)
 
 NETO_GRAVADO: [número]
 IVA_105: [número o 0]
@@ -59,7 +60,11 @@ IVA_21: [número o 0]
 IVA_27: [número o 0]
 TOTAL: [número]
 
-Si un campo no está visible o no existe, dejalo vacío. No inventes datos. Usá punto como separador decimal.`
+Reglas obligatorias:
+- SIEMPRE incluí la sección ITEMS con TODOS los productos o servicios que veas, aunque sea uno solo. Si el detalle es legible, NUNCA devuelvas ITEMS vacío.
+- Escribí los números SIN símbolo de moneda, SIN separador de miles y usando punto como separador decimal (ej: 1250.50).
+- Si el detalle de productos no se puede leer, escribí exactamente: ITEMS: NO_DETECTADO
+- Si otro campo no está visible o no existe, dejalo vacío. No inventes datos.`
 
 serve(async (req: Request) => {
   if (req.method === 'OPTIONS') {
@@ -76,7 +81,7 @@ serve(async (req: Request) => {
       )
     }
 
-    let body: { fileBase64?: string; mimeType?: string }
+    let body: { fileBase64?: string; mimeType?: string; fileName?: string }
     try {
       body = await req.json()
     } catch {
@@ -86,7 +91,7 @@ serve(async (req: Request) => {
       )
     }
 
-    const { fileBase64, mimeType = 'image/jpeg' } = body
+    const { fileBase64, mimeType = 'image/jpeg', fileName } = body
 
     if (!fileBase64) {
       return new Response(
@@ -95,11 +100,27 @@ serve(async (req: Request) => {
       )
     }
 
-    // Para PDFs, GPT-4 Vision no los soporta directamente
-    // Los tratamos como imagen (el frontend debería convertir la primera página)
-    const imageUrl = `data:${mimeType};base64,${fileBase64}`
+    const isPdf = mimeType === 'application/pdf'
 
-    console.log(`ocr-gpt4v: procesando imagen, mimeType=${mimeType}`)
+    console.log(`ocr-gpt4v: procesando ${isPdf ? 'PDF' : 'imagen'}, mimeType=${mimeType}`)
+
+    // Chat Completions acepta PDFs como content part `file` (base64) y también
+    // imágenes como `image_url`. Usamos un único camino para ambos formatos.
+    const fileContent = isPdf
+      ? {
+          type: 'file',
+          file: {
+            filename: fileName ?? 'factura.pdf',
+            file_data: `data:application/pdf;base64,${fileBase64}`,
+          },
+        }
+      : {
+          type: 'image_url',
+          image_url: {
+            url: `data:${mimeType};base64,${fileBase64}`,
+            detail: 'high',  // alta resolución para mejor extracción
+          },
+        }
 
     const openaiResponse = await fetch('https://api.openai.com/v1/chat/completions', {
       method: 'POST',
@@ -108,8 +129,8 @@ serve(async (req: Request) => {
         'Content-Type': 'application/json',
       },
       body: JSON.stringify({
-        model: 'gpt-4o',  // gpt-4o tiene mejor soporte de visión que gpt-4-vision-preview
-        max_tokens: 2000,
+        model: 'gpt-4o',
+        max_tokens: 4000,
         messages: [
           {
             role: 'user',
@@ -118,13 +139,7 @@ serve(async (req: Request) => {
                 type: 'text',
                 text: EXTRACTION_PROMPT,
               },
-              {
-                type: 'image_url',
-                image_url: {
-                  url: imageUrl,
-                  detail: 'high',  // alta resolución para mejor extracción
-                },
-              },
+              fileContent,
             ],
           },
         ],
@@ -138,7 +153,11 @@ serve(async (req: Request) => {
     }
 
     const openaiResult = await openaiResponse.json()
-    const rawText = openaiResult.choices?.[0]?.message?.content ?? ''
+    const rawText: string = openaiResult.choices?.[0]?.message?.content ?? ''
+
+    if (!rawText.trim()) {
+      throw new Error('OpenAI no devolvió texto para el documento. Probá con otro PDF o una imagen más nítida.')
+    }
 
     console.log(`ocr-gpt4v: extracción completada. Tokens usados: ${openaiResult.usage?.total_tokens ?? 'N/A'}`)
 

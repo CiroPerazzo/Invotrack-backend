@@ -1,5 +1,7 @@
 import { createAdminClient } from '../config/supabase.js'
 
+const EXPORT_INVOICE_TYPES = new Set(['Factura E', 'Nota de Crédito E', 'Nota de Débito E'])
+
 export class InvoiceRepository {
   async reserveCae({ invoiceId, companyId, userId }) {
     const { error } = await createAdminClient().rpc('reserve_invoice_cae', {
@@ -66,6 +68,11 @@ export class InvoiceRepository {
     delete cleanInvoice.consumidor_final_anonimo
     delete cleanInvoice.__emitMode
     delete cleanInvoice.items
+
+    // Solo los comprobantes de exportación (E) guardan país de destino.
+    if (!EXPORT_INVOICE_TYPES.has(cleanInvoice.tipo_comprobante)) {
+      cleanInvoice.pais_destino = null
+    }
 
     if (!cleanInvoice.fecha_vencimiento) cleanInvoice.fecha_vencimiento = null
 
