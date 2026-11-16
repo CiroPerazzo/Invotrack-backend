@@ -15,3 +15,6 @@ verify_jwt = true
 
 [functions.afip-validate]
 verify_jwt = true
+
+[functions.ocr-gpt4v]
+verify_jwt = true

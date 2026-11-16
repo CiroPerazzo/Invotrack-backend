@@ -580,6 +580,10 @@ function createCaeStore() {
       }
       const user = await request('/auth/v1/user', { authorization })
       if (!user?.id) throw Object.assign(new Error('Sesión inválida'), { status: 401 })
+      const clients = await request(`/rest/v1/clients?select=id&company_id=eq.${encodeURIComponent(invoice.company_id)}&id=eq.${encodeURIComponent(invoice.client_id)}`, { authorization })
+      if (!Array.isArray(clients) || clients.length !== 1) {
+        throw Object.assign(new Error('El cliente seleccionado no existe en esta empresa.'), { status: 400 })
+      }
       await request('/rest/v1/rpc/reserve_invoice_cae', {
         method: 'POST',
         body: { p_invoice_id: invoice.id, p_company_id: invoice.company_id, p_user_id: user.id },
@@ -647,6 +651,9 @@ async function handler(req) {
       }
       if (String(body.invoice.cae ?? '').trim() || ['issued', 'authorized', 'valid'].includes(body.invoice.afip_status)) {
         return json({ error: 'Esta factura ya tiene un CAE. No se puede solicitar otro.' }, 409)
+      }
+      if (!uuid.test(body.invoice.client_id ?? '')) {
+        return json({ error: 'Creá o seleccioná un cliente antes de solicitar el CAE.' }, 400)
       }
     }
 

@@ -28,7 +28,7 @@ const corsHeaders = {
 }
 
 const EXTRACTION_PROMPT = `Sos un sistema de extracción de datos de facturas argentinas. 
-Analizá la imagen y extraé TODOS los datos del comprobante fiscal en el siguiente formato exacto:
+Analizá el documento completo, incluidas todas las páginas del PDF, y extraé TODOS los datos del comprobante fiscal en el siguiente formato exacto:
 
 TIPO: [Factura A / Factura B / Factura C / Nota de Crédito A / etc]
 NUMERO: [XXXX-XXXXXXXX]
@@ -93,11 +93,21 @@ serve(async (req: Request) => {
 
     const { fileBase64, mimeType = 'image/jpeg', fileName } = body
 
-    if (!fileBase64) {
+    if (typeof fileBase64 !== 'string' || !fileBase64) {
       return new Response(
         JSON.stringify({ error: 'fileBase64 es requerido' }),
         { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
       )
+    }
+
+    if (!['application/pdf', 'image/jpeg', 'image/png', 'image/webp'].includes(mimeType)) {
+      return new Response(JSON.stringify({ error: 'Formato no soportado. Usá PDF, JPEG, PNG o WEBP.' }),
+        { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } })
+    }
+    const decodedSize = fileBase64.length * 3 / 4 - (fileBase64.endsWith('==') ? 2 : fileBase64.endsWith('=') ? 1 : 0)
+    if (decodedSize > 10 * 1024 * 1024) {
+      return new Response(JSON.stringify({ error: 'El archivo no puede superar los 10 MB.' }),
+        { status: 413, headers: { ...corsHeaders, 'Content-Type': 'application/json' } })
     }
 
     const isPdf = mimeType === 'application/pdf'

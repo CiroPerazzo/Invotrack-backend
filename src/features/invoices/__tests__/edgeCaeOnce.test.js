@@ -5,6 +5,7 @@ import { describe, expect, it, vi } from 'vitest'
 const invoice = {
   id: '11111111-1111-4111-8111-111111111111',
   company_id: '22222222-2222-4222-8222-222222222222',
+  client_id: '44444444-4444-4444-8444-444444444444',
   tipo_comprobante: 'Factura B', numero_comprobante: 10, total_amount: 121,
 }
 const sources = [
@@ -12,7 +13,7 @@ const sources = [
   'scripts/arca/afip-emit.dashboard.js',
 ]
 
-function setup(path, { failCae = false, failRecord = false, reserveError, rejectCae = false } = {}) {
+function setup(path, { failCae = false, failRecord = false, reserveError, rejectCae = false, missingClient = false } = {}) {
   const reservations = new Set()
   const records = []
   const cae = vi.fn(async () => {
@@ -23,6 +24,12 @@ function setup(path, { failCae = false, failRecord = false, reserveError, reject
   const fetch = vi.fn(async (url, options = {}) => {
     if (url.includes('/arca_tokens')) return Response.json([{ token: 't', sign: 's', expiration_time: '2099-01-01' }])
     if (url.endsWith('/auth/v1/user')) return Response.json({ id: 'user-a' })
+    if (url.includes('/clients?')) {
+      expect(url).toContain(`company_id=eq.${invoice.company_id}`)
+      expect(url).toContain(`id=eq.${invoice.client_id}`)
+      expect(options.headers.Authorization).toBe('Bearer user-token')
+      return Response.json(missingClient ? [] : [{ id: invoice.client_id }])
+    }
     if (url.endsWith('/rpc/reserve_invoice_cae')) {
       if (reserveError) return Response.json(reserveError, { status: 400 })
       const { p_invoice_id: id } = JSON.parse(options.body)
@@ -63,6 +70,18 @@ function setup(path, { failCae = false, failRecord = false, reserveError, reject
 }
 
 describe.each(sources)('una sola solicitud de CAE: %s', (source) => {
+  it('rechaza datos de cliente sin un registro seleccionado', async () => {
+    const ctx = setup(source)
+    expect((await ctx.send({ ...invoice, client_id: null, receptor_razon_social: 'Cliente escrito' })).status).toBe(400)
+    expect(ctx.fetch).not.toHaveBeenCalled()
+  })
+
+  it('rechaza clientes inexistentes o ajenos sin consumir el intento', async () => {
+    const ctx = setup(source, { missingClient: true })
+    expect((await ctx.send()).status).toBe(400)
+    expect(ctx.cae).not.toHaveBeenCalled()
+    expect(ctx.fetch.mock.calls.some(([url]) => url.endsWith('/rpc/reserve_invoice_cae'))).toBe(false)
+  })
   it('bloquea llamadas simultáneas y sucesivas con el mismo id', async () => {
     const ctx = setup(source)
     const responses = await Promise.all([ctx.send(), ctx.send()])

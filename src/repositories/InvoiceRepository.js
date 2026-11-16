@@ -3,6 +3,15 @@ import { createAdminClient } from '../config/supabase.js'
 const EXPORT_INVOICE_TYPES = new Set(['Factura E', 'Nota de Crédito E', 'Nota de Débito E'])
 
 export class InvoiceRepository {
+  async assertClientBelongsToCompany({ clientId, companyId }) {
+    const { data, error } = await createAdminClient().from('clients')
+      .select('id').eq('company_id', companyId).eq('id', clientId).maybeSingle()
+    if (error) throw error
+    if (!data) {
+      throw Object.assign(new Error('El cliente seleccionado no existe en esta empresa.'), { status: 400 })
+    }
+  }
+
   async reserveCae({ invoiceId, companyId, userId }) {
     const { error } = await createAdminClient().rpc('reserve_invoice_cae', {
       p_invoice_id: invoiceId,

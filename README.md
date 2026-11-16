@@ -37,6 +37,24 @@ esta ruta Express.
 
 ## Infraestructura Supabase
 
+### OCR y contactos antes del CAE
+
+Desplegá las funciones `ocr-gpt4v` y `afip-emit` junto con el frontend actualizado:
+
+```bash
+supabase functions deploy ocr-gpt4v
+supabase functions deploy afip-emit
+```
+
+El OCR requiere el secreto `OPENAI_API_KEY` y acepta imágenes o PDFs de hasta
+10 MB. El frontend llama a `ocr-gpt4v` (mismo nombre que el directorio de la función).
+Los PDFs se envían completos, incluidas sus páginas, como archivos a OpenAI.
+
+Para solicitar CAE, tanto la función como Express exigen `client_id` de un
+cliente existente de la misma empresa antes de reservar el intento. El alta
+rápida del frontend permite revisar y guardar los datos de cliente/proveedor
+cargados en la factura. Reiniciá Express si utilizás esa vía de emisión.
+
 ### Puntos de venta
 
 Aplicá `supabase/migrations/010_sale_points.sql` en el SQL Editor del proyecto

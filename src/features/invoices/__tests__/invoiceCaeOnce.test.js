@@ -7,6 +7,7 @@ const { ElectronicBillingService } = await import('@/modules/arca/services/Elect
 const invoice = {
   id: '11111111-1111-4111-8111-111111111111',
   company_id: '22222222-2222-4222-8222-222222222222',
+  client_id: '44444444-4444-4444-8444-444444444444',
   type: 'receivable', tipo_comprobante: 'Factura B', total_amount: 121,
 }
 const result = { cae: '70000000000001', numeroComprobante: 10, puntoDeVenta: 1 }
@@ -14,6 +15,7 @@ const result = { cae: '70000000000001', numeroComprobante: 10, puntoDeVenta: 1 }
 function context() {
   const reserved = new Set()
   const repo = {
+    assertClientBelongsToCompany: vi.fn(async () => {}),
     reserveCae: vi.fn(async ({ invoiceId }) => {
       if (reserved.has(invoiceId)) throw Object.assign(new Error('CAE ya solicitado'), { status: 409 })
       reserved.add(invoiceId)
@@ -30,6 +32,21 @@ function context() {
 }
 
 describe('una sola solicitud de CAE por factura (Express)', () => {
+  it('exige un cliente creado antes de reservar el intento', async () => {
+    const ctx = context()
+    await expect(new InvoiceEmitService(ctx).emit({ invoice: { ...invoice, client_id: null }, userId: 'user-a' })).rejects.toThrow('cliente')
+    expect(ctx.repo.reserveCae).not.toHaveBeenCalled()
+    expect(ctx.createVoucher).not.toHaveBeenCalled()
+  })
+
+  it('no reserva ni emite con un cliente inexistente o de otra empresa', async () => {
+    const ctx = context()
+    ctx.repo.assertClientBelongsToCompany.mockRejectedValue(new Error('Cliente ajeno'))
+    await expect(ctx.emit()).rejects.toThrow('Cliente ajeno')
+    expect(ctx.repo.assertClientBelongsToCompany).toHaveBeenCalledWith({ clientId: invoice.client_id, companyId: invoice.company_id })
+    expect(ctx.repo.reserveCae).not.toHaveBeenCalled()
+    expect(ctx.createVoucher).not.toHaveBeenCalled()
+  })
   it('persiste el pedido antes de emitir y el CAE antes de guardar la factura', async () => {
     const ctx = context()
     ctx.createVoucher.mockImplementation(async () => {

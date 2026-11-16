@@ -27,6 +27,11 @@ export class InvoiceEmitService {
       throw Object.assign(new Error('Esta factura ya tiene un CAE. No se puede solicitar otro.'), { status: 409 })
     }
 
+    if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(invoice.client_id ?? '')) {
+      throw Object.assign(new Error('Creá o seleccioná un cliente antes de solicitar el CAE.'), { status: 400 })
+    }
+    await this.repo.assertClientBelongsToCompany({ clientId: invoice.client_id, companyId: invoice.company_id })
+
     // Reserve durably before calling ARCA. Never release this reservation on
     // errors: a timeout can hide a successful authorization.
     await this.repo.reserveCae({ invoiceId: invoice.id, companyId: invoice.company_id, userId })
